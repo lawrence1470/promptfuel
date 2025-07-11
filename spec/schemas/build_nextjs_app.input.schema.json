@@ -1,0 +1,11 @@
+{
+  "title": "BuildNextjsAppInput",
+  "type": "object",
+  "properties": {
+    "user_requirements": {
+      "type": "string",
+      "description": "Natural-language description of features and pages the user wants"
+    }
+  },
+  "required": ["user_requirements"]
+}

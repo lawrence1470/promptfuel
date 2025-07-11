@@ -11,6 +11,8 @@ import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { eventBroadcaster } from "~/lib/eventBroadcaster";
 import { getNetworkInfo, findAvailablePort } from "~/lib/networkUtils";
 import { processManager } from "~/lib/processManager";
+import { generateInitialApp } from "~/server/services/claude";
+import { applyGeneratedFiles } from "~/server/services/fileManager";
 
 /**
  * Helper function to create a temporary directory for the Expo project
@@ -323,10 +325,23 @@ async function runCmd(
 }
 
 // In-memory build progress storage (in production, use Redis or database)
-const buildProgressMap = new Map<string, any>();
+export const buildProgressMap = new Map<string, any>();
+
+// Session timeout cleanup (30 minutes of inactivity)
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, progress] of buildProgressMap.entries()) {
+    const lastUpdate = progress.lastActivity || progress.timestamp || 0;
+    if (now - lastUpdate > SESSION_TIMEOUT) {
+      console.log(`[Cleanup] Removing expired session: ${sessionId}`);
+      buildProgressMap.delete(sessionId);
+    }
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
 
 // Helper to update build progress
-function updateBuildProgress(sessionId: string, update: any) {
+export function updateBuildProgress(sessionId: string, update: any) {
   const current = buildProgressMap.get(sessionId) || {};
   const logs = current.logs || [];
   const newLogs = current.newLogs || [];
@@ -341,6 +356,7 @@ function updateBuildProgress(sessionId: string, update: any) {
     ...update,
     logs,
     newLogs,
+    lastActivity: Date.now(),
   });
   
   // Also try to send via SSE if available
@@ -351,6 +367,84 @@ function updateBuildProgress(sessionId: string, update: any) {
 }
 
 export const appStarterRouter = createTRPCRouter({
+  checkExistingBuild: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string().min(1, "Session ID is required"),
+      })
+    )
+    .query(async ({ input }) => {
+      const { sessionId } = input;
+      
+      try {
+        // First check in-memory progress
+        const progress = buildProgressMap.get(sessionId);
+        if (progress) {
+          return {
+            exists: true,
+            type: "active",
+            progress: {
+              ...progress,
+              logs: progress.logs || [],
+              newLogs: [],
+            },
+          };
+        }
+
+        // Check if there's a saved build in the database
+        const { db } = await import("~/server/db");
+        const savedBuild = await db.buildSession.findUnique({
+          where: { sessionId },
+          select: {
+            sessionId: true,
+            projectName: true,
+            appDescription: true,
+            expoUrl: true,
+            createdAt: true,
+            lastAccessed: true,
+            expiresAt: true,
+            isActive: true,
+          },
+        });
+
+        if (savedBuild) {
+          // Check if build has expired
+          if (savedBuild.expiresAt && savedBuild.expiresAt < new Date()) {
+            return {
+              exists: false,
+              type: "none",
+            };
+          }
+
+          return {
+            exists: true,
+            type: "saved",
+            build: {
+              sessionId: savedBuild.sessionId,
+              projectName: savedBuild.projectName,
+              appDescription: savedBuild.appDescription,
+              expoUrl: savedBuild.expoUrl,
+              createdAt: savedBuild.createdAt.toISOString(),
+              lastAccessed: savedBuild.lastAccessed.toISOString(),
+              canRestore: true,
+            },
+          };
+        }
+
+        return {
+          exists: false,
+          type: "none",
+        };
+      } catch (error) {
+        console.error(`[AppStarter] Error checking existing build for ${sessionId}:`, error);
+        return {
+          exists: false,
+          type: "none",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+
   getProgress: publicProcedure
     .input(
       z.object({
@@ -383,16 +477,139 @@ export const appStarterRouter = createTRPCRouter({
         newLogs: logs,
       };
     }),
+
+  restoreBuild: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string().min(1, "Session ID is required"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { sessionId } = input;
+
+      try {
+        // Import the build persistence service
+        const { buildStorageService } = await import("~/server/services/buildStorageService");
+        const { isObjectStorageAvailable } = await import("~/server/services/objectStorageService");
+
+        if (!isObjectStorageAvailable()) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Build persistence is not configured",
+          });
+        }
+
+        // Initialize progress for restoration
+        updateBuildProgress(sessionId, {
+          stage: "Restoring build",
+          message: "Loading your saved project...",
+          progress: 10,
+          isComplete: false,
+          hasError: false,
+          logs: ["Starting build restoration..."],
+          newLogs: ["Starting build restoration..."],
+        });
+
+        // Restore the build
+        const result = await buildStorageService.restoreBuild(sessionId);
+
+        if (!result.success || !result.projectDir) {
+          updateBuildProgress(sessionId, {
+            stage: "Restoration failed",
+            message: result.error || "Failed to restore build",
+            hasError: true,
+            error: result.error,
+          });
+
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: result.error || "Failed to restore build",
+          });
+        }
+
+        updateBuildProgress(sessionId, {
+          stage: "Build restored",
+          message: "Project files restored successfully",
+          progress: 50,
+        });
+
+        // Find available port for Expo dev server
+        const expoPort = await findAvailablePort(8081);
+
+        updateBuildProgress(sessionId, {
+          stage: "Starting development server",
+          message: `Starting Expo development server on port ${expoPort}...`,
+          progress: 80,
+        });
+
+        // Start Expo development server
+        const { process: expoProcess, url: expoUrl } = await startExpoServer(
+          result.projectDir,
+          expoPort,
+          sessionId
+        );
+
+        // Get network information
+        const networkInfo = await getNetworkInfo(expoPort);
+
+        // Complete the restoration
+        updateBuildProgress(sessionId, {
+          type: "completed",
+          stage: "Build restored",
+          message: "Your saved project is ready! Scan the QR code with Expo Go.",
+          progress: 100,
+          isComplete: true,
+          expoUrl,
+          networkInfo,
+          data: {
+            projectDir: result.projectDir,
+            networkInfo,
+            expoUrl,
+            port: expoPort,
+            processId: expoProcess.pid,
+            restored: true,
+          },
+        });
+
+        return {
+          sessionId,
+          projectDir: result.projectDir,
+          expoUrl,
+          networkInfo,
+          processId: expoProcess.pid,
+          status: "restored",
+        };
+      } catch (error) {
+        updateBuildProgress(sessionId, {
+          type: "error",
+          stage: "Restoration failed",
+          message: "Failed to restore saved build",
+          error: error instanceof Error ? error.message : String(error),
+          hasError: true,
+        });
+
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to restore build: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+      }
+    }),
     
   start: publicProcedure
     .input(
       z.object({
         projectName: z.string().min(1, "Project name is required"),
         sessionId: z.string().min(1, "Session ID is required"),
+        appDescription: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
-      const { sessionId, projectName } = input;
+      const { sessionId, projectName, appDescription } = input;
 
       try {
         // Initialize build progress
@@ -486,10 +703,47 @@ export const appStarterRouter = createTRPCRouter({
           );
         }
 
+        // Generate custom app structure if description provided
+        if (appDescription) {
+          updateBuildProgress(sessionId, {
+            stage: "Generating custom app",
+            message: "Claude is creating your custom app structure...",
+            progress: 60,
+          });
+
+          try {
+            const generatedFiles = await generateInitialApp(appDescription, projectName);
+            
+            if (generatedFiles.length > 0) {
+              updateBuildProgress(sessionId, {
+                stage: "Applying custom code",
+                message: `Creating ${generatedFiles.length} custom file(s)...`,
+                progress: 70,
+              });
+
+              const results = await applyGeneratedFiles(projectDir, generatedFiles);
+              const successCount = results.filter(r => r.success).length;
+              
+              updateBuildProgress(sessionId, {
+                stage: "Custom app ready",
+                message: `Created ${successCount} custom file(s) based on your description`,
+                progress: 80,
+              });
+            }
+          } catch (error) {
+            console.error(`[AppStarter] Failed to generate custom app:`, error);
+            updateBuildProgress(sessionId, {
+              stage: "Using default template",
+              message: "Using default Expo template (custom generation failed)",
+              progress: 80,
+            });
+          }
+        }
+
         // Find available port for Expo dev server
         const expoPort = await findAvailablePort(8081);
 
-        eventBroadcaster.sendToSession(sessionId, {
+        updateBuildProgress(sessionId, {
           type: "progress",
           stage: "Starting development server",
           message: `Starting Expo development server on port ${expoPort}...`,

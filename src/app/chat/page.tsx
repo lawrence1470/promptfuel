@@ -30,6 +30,95 @@ interface BuildProgress {
   };
 }
 
+// Save Build Button Component
+function SaveBuildButton({ sessionId }: { sessionId: string }) {
+  const [isSaved, setIsSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Check if build persistence is available
+  const { data: storageConfig } = api.buildPersistence.getConfig.useQuery();
+
+  // Save build mutation
+  const saveBuild = api.buildPersistence.save.useMutation({
+    onSuccess: () => {
+      setIsSaved(true);
+      setSaveError(null);
+      setTimeout(() => setIsSaved(false), 3000); // Reset after 3 seconds
+    },
+    onError: (error) => {
+      setSaveError(error.message);
+      setTimeout(() => setSaveError(null), 5000); // Clear error after 5 seconds
+    },
+  });
+
+  const handleSave = () => {
+    if (saveBuild.isPending || isSaved) return;
+    
+    saveBuild.mutate({
+      sessionId,
+      projectName: `Expo App ${new Date().toLocaleDateString()}`,
+    });
+  };
+
+  // Don't show if storage is not available
+  if (!storageConfig?.isAvailable) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 space-y-2">
+      <button
+        onClick={handleSave}
+        disabled={saveBuild.isPending || isSaved}
+        className={`w-full px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+          isSaved
+            ? "bg-green-100 text-green-800 border border-green-200"
+            : saveBuild.isPending
+            ? "bg-gray-100 text-gray-500 border border-gray-200 cursor-not-allowed"
+            : "bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200"
+        }`}
+      >
+        {saveBuild.isPending ? (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Saving...
+          </span>
+        ) : isSaved ? (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            Saved!
+          </span>
+        ) : (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            Save Build
+          </span>
+        )}
+      </button>
+
+      {saveError && (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">
+          {saveError}
+        </div>
+      )}
+
+      {isSaved && (
+        <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded p-2">
+          Build saved! You can find it in{" "}
+          <a href="/builds" className="underline">My Builds</a>.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatPageContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("sessionId");
@@ -41,6 +130,7 @@ function ChatPageContent() {
 
   // Track if app creation has started
   const [appCreationStarted, setAppCreationStarted] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   
   // Use polling-based progress tracking
   const { progress: buildProgress, isLoading: isLoadingProgress } = useBuildProgress({
@@ -48,40 +138,7 @@ function ChatPageContent() {
     enabled: appCreationStarted && !!sessionId && sessionId !== "__INVALID__",
   });
 
-  // Generate QR code when build completes
-  useEffect(() => {
-    if (buildProgress.isComplete && buildProgress.expoUrl) {
-      generateQRCode(buildProgress.expoUrl);
-    }
-  }, [buildProgress.isComplete, buildProgress.expoUrl]);
-
-  // Enable manual start if progress doesn't start after 10 seconds
-  useEffect(() => {
-    if (
-      sessionId &&
-      sessionId !== "__INVALID__" &&
-      buildProgress.progress === 0 &&
-      !buildProgress.isComplete
-    ) {
-      const timer = setTimeout(() => {
-        if (buildProgress.progress === 0 && !buildProgress.isComplete) {
-          console.log(
-            `[ChatPage] Enabling manual start for session: ${sessionId}`
-          );
-          setCanStartManually(true);
-        }
-      }, 10000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [sessionId, buildProgress.progress, buildProgress.isComplete]);
-
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, buildProgress.logs.length]); // Add dependencies
-
-  // Start app creation when component mounts
+  // Start app creation mutation (declare before useEffects that reference it)
   const createApp = api.appStarter.start.useMutation({
     onSuccess: (data) => {
       console.log("App creation completed:", data);
@@ -104,6 +161,45 @@ function ChatPageContent() {
     },
   });
 
+  // Generate QR code when build completes
+  useEffect(() => {
+    if (buildProgress.isComplete && buildProgress.expoUrl) {
+      generateQRCode(buildProgress.expoUrl);
+    }
+  }, [buildProgress.isComplete, buildProgress.expoUrl]);
+
+  // Enable manual start if progress doesn't start after 15 seconds or if there's an error
+  useEffect(() => {
+    if (
+      sessionId &&
+      sessionId !== "__INVALID__" &&
+      appCreationStarted &&
+      !buildProgress.isComplete &&
+      !createApp.isPending
+    ) {
+      // Show manual start if progress stalls or there's an error
+      const timer = setTimeout(() => {
+        if (
+          (buildProgress.progress === 0 || buildProgress.hasError) && 
+          !buildProgress.isComplete &&
+          !createApp.isPending
+        ) {
+          console.log(
+            `[ChatPage] Enabling manual start for session: ${sessionId} (progress: ${buildProgress.progress}%, hasError: ${buildProgress.hasError})`
+          );
+          setCanStartManually(true);
+        }
+      }, 15000); // Increased timeout to 15 seconds
+
+      return () => clearTimeout(timer);
+    }
+  }, [sessionId, buildProgress.progress, buildProgress.isComplete, buildProgress.hasError, appCreationStarted, createApp.isPending]);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, buildProgress.logs.length]); // Add dependencies
+
   // Generate QR code for Expo Go
   const generateQRCode = async (expoUrl?: string) => {
     try {
@@ -123,44 +219,67 @@ function ChatPageContent() {
     }
   };
 
-  // Auto-start app creation when page loads
+  // Validate session and check if build already exists
   useEffect(() => {
-    if (
-      sessionId &&
-      sessionId !== "__INVALID__" &&
-      !buildProgress.isComplete &&
-      !createApp.isPending &&
-      !createApp.isSuccess
-    ) {
-      // Start app creation immediately
-      // Progress will be tracked through polling
-      console.log(
-        `[ChatPage] Starting app creation for session: ${sessionId}`
-      );
-
-      // Small delay to let component fully mount
-      const startTimer = setTimeout(() => {
-        console.log(`[ChatPage] Marking app creation as started for session: ${sessionId}`);
-        setAppCreationStarted(true);
-        
-        // Additional delay to ensure backend is ready
-        setTimeout(() => {
-          createApp.mutate({
-            projectName: "MyExpoApp",
-            sessionId,
-          });
-        }, 500);
-      }, 100);
-
-      return () => clearTimeout(startTimer);
+    if (!sessionId || sessionId === "__INVALID__") {
+      setSessionError("Invalid session ID");
+      return;
     }
-  }, [
-    sessionId,
-    buildProgress.isComplete,
-    createApp.isPending,
-    createApp.isSuccess,
-    // Dependencies for app creation trigger
-  ]);
+
+    // Check if this is a refresh of an existing session
+    const checkExistingBuild = async () => {
+      try {
+        // First check if we have progress data for this session
+        const progressResponse = await fetch(`/api/trpc/appStarter.getProgress?input=${encodeURIComponent(JSON.stringify({ json: { sessionId } }))}`, {
+          method: 'GET',
+        });
+
+        if (progressResponse.ok) {
+          const data = await progressResponse.json();
+          const sessionData = data[0]?.result?.data?.json;
+          
+          // If we found existing session data, don't start a new build
+          if (sessionData && (sessionData.isComplete || sessionData.progress > 0)) {
+            console.log(`[ChatPage] Found existing session data for: ${sessionId}`);
+            setAppCreationStarted(true);
+            return;
+          }
+        }
+
+        // Only start new build if no existing data found
+        if (!buildProgress.isComplete && !createApp.isPending && !createApp.isSuccess) {
+          console.log(`[ChatPage] Starting new app creation for session: ${sessionId}`);
+          startNewBuild();
+        }
+      } catch (error) {
+        console.error(`[ChatPage] Error checking existing build:`, error);
+        setSessionError("Failed to validate session. Please try creating a new app.");
+      }
+    };
+
+    const startNewBuild = () => {
+      setAppCreationStarted(true);
+      
+      // Get app description from sessionStorage if available
+      const appDescription = sessionStorage.getItem(`appDescription-${sessionId}`);
+      if (appDescription) {
+        sessionStorage.removeItem(`appDescription-${sessionId}`); // Clean up
+      }
+      
+      // Small delay to ensure backend is ready
+      setTimeout(() => {
+        createApp.mutate({
+          projectName: "MyExpoApp",
+          sessionId,
+          appDescription: appDescription || undefined,
+        });
+      }, 500);
+    };
+
+    // Small delay to let component fully mount
+    const timer = setTimeout(checkExistingBuild, 100);
+    return () => clearTimeout(timer);
+  }, [sessionId]);
 
   // Manual start function
   const handleManualStart = () => {
@@ -170,12 +289,20 @@ function ChatPageContent() {
       );
       setCanStartManually(false); // Hide the button
       setAppCreationStarted(true); // Mark app creation as started
+      setSessionError(null); // Clear any session errors
+
+      // Get app description from sessionStorage if available
+      const appDescription = sessionStorage.getItem(`appDescription-${sessionId}`);
+      if (appDescription) {
+        sessionStorage.removeItem(`appDescription-${sessionId}`); // Clean up
+      }
 
       // Small delay before starting build
       setTimeout(() => {
         createApp.mutate({
           projectName: "MyExpoApp",
           sessionId,
+          appDescription: appDescription || undefined,
         });
       }, 500);
     }
@@ -229,16 +356,22 @@ function ChatPageContent() {
     }
   };
 
-  if (!sessionId) {
+  if (!sessionId || sessionError) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-white">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <h1 className="mb-4 font-bold text-2xl text-black">
-            Invalid Session
+            Session Issue
           </h1>
-          <p className="text-gray-600">
-            No session ID provided. Please go back and create a new app.
+          <p className="text-gray-600 mb-6">
+            {sessionError || "No session ID provided. Please go back and create a new app."}
           </p>
+          <button
+            onClick={() => window.location.href = '/'}
+            className="px-6 py-3 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors"
+          >
+            Create New App
+          </button>
         </div>
       </main>
     );
@@ -372,14 +505,24 @@ function ChatPageContent() {
                       !createApp.isPending && (
                         <div className="text-center space-y-2">
                           <p className="text-orange-600 text-sm">
-                            Build hasn't started yet
+                            {buildProgress.hasError 
+                              ? "Build encountered an error. Try restarting." 
+                              : "Build is taking longer than expected."}
                           </p>
-                          <button
-                            onClick={handleManualStart}
-                            className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors"
-                          >
-                            Start Building App
-                          </button>
+                          <div className="space-x-2">
+                            <button
+                              onClick={handleManualStart}
+                              className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors"
+                            >
+                              {buildProgress.hasError ? "Retry Build" : "Start Building App"}
+                            </button>
+                            <button
+                              onClick={() => window.location.href = '/'}
+                              className="px-4 py-2 bg-gray-600 text-white text-sm rounded hover:bg-gray-700 transition-colors"
+                            >
+                              Create New App
+                            </button>
+                          </div>
                         </div>
                       )}
                   </div>
@@ -515,6 +658,9 @@ function ChatPageContent() {
                         </div>
                       )}
                     </div>
+
+                    {/* Save Build Button */}
+                    <SaveBuildButton sessionId={sessionId!} />
                   </div>
                 ) : (
                   <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-xl border border-gray-200 bg-white p-4">

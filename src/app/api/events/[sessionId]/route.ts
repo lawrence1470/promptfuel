@@ -162,10 +162,12 @@ export async function GET(
           reason
         );
 
-        // Clean up timers
-        const ctrl = writer as any;
-        if (ctrl._cleanup) {
-          ctrl._cleanup();
+        // Clean up timers - access from connection object
+        if (connection && (connection as any).controller) {
+          const ctrl = (connection as any).controller as any;
+          if (ctrl._cleanup) {
+            ctrl._cleanup();
+          }
         }
 
         // Properly remove the connection

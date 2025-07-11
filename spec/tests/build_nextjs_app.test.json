@@ -1,0 +1,19 @@
+{
+  "input": {
+    "user_requirements": "Homepage with a hero section showcasing a SaaS product, pricing page with three tiers (Free, Pro, Enterprise), and a contact form page."
+  },
+  "expected_output": {
+    "files": {
+      "app/page.tsx": "// Homepage with hero section using Tailwind classes for modern design",
+      "app/pricing/page.tsx": "// Three-tier pricing grid with beautiful cards and hover effects",
+      "app/contact/page.tsx": "// Accessible contact form with proper validation and styling",
+      "app/layout.tsx": "// Root layout with navigation and footer",
+      "components/Button.tsx": "// Reusable styled button component with variants",
+      "components/Card.tsx": "// Reusable card component with shadows and hover states",
+      "components/Header.tsx": "// Navigation header with responsive design",
+      "components/Footer.tsx": "// Footer with links and social media",
+      "tailwind.config.ts": "// Tailwind configuration with custom colors and fonts",
+      "package.json": "{ \"name\": \"my-nextjs-app\", \"version\": \"1.0.0\", \"dependencies\": { \"next\": \"latest\", \"react\": \"latest\", \"react-dom\": \"latest\", \"tailwindcss\": \"latest\", \"@types/node\": \"latest\", \"@types/react\": \"latest\", \"@types/react-dom\": \"latest\", \"typescript\": \"latest\" } }"
+    }
+  }
+}

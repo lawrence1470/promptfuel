@@ -1,0 +1,14 @@
+{
+  "title": "BuildNextjsAppOutput",
+  "type": "object",
+  "properties": {
+    "files": {
+      "type": "object",
+      "description": "Mapping of file paths to full file contents",
+      "patternProperties": {
+        "^.*$": { "type": "string" }
+      }
+    }
+  },
+  "required": ["files"]
+}

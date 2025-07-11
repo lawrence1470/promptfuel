@@ -18,3 +18,42 @@ model Post {
 
     @@index([name])
 }
+
+model BuildSession {
+    id            String   @id @default(cuid())
+    sessionId     String   @unique
+    userId        String?  // Optional user association
+    projectName   String
+    appDescription String?
+    storageUrl    String   // R2 URL to compressed build
+    fileCount     Int
+    sizeBytes     BigInt
+    buildMetadata Json     // Expo config, dependencies, etc.
+    expoUrl       String?
+    isActive      Boolean  @default(true)
+    isShared      Boolean  @default(false)
+    shareToken    String?  @unique
+    createdAt     DateTime @default(now())
+    lastAccessed  DateTime @default(now())
+    expiresAt     DateTime?
+    
+    files BuildFile[]
+    
+    @@index([userId])
+    @@index([shareToken])
+    @@index([createdAt])
+    @@index([sessionId])
+}
+
+model BuildFile {
+    id        String @id @default(cuid())
+    sessionId String
+    filePath  String
+    fileHash  String  // SHA-256 for deduplication
+    sizeBytes Int
+    
+    session BuildSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+    
+    @@unique([sessionId, filePath])
+    @@index([fileHash]) // For deduplication
+}

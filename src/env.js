@@ -11,6 +11,18 @@ export const env = createEnv({
 		NODE_ENV: z
 			.enum(["development", "test", "production"])
 			.default("development"),
+		ANTHROPIC_API_KEY: z.string().min(1),
+		// Cloudflare R2 Configuration
+		R2_ENDPOINT: z.string().url().optional(),
+		R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+		R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+		R2_BUCKET_NAME: z.string().min(1).optional(),
+		R2_PUBLIC_URL: z.string().url().optional(),
+		// Build Storage Settings
+		BUILD_RETENTION_DAYS: z.coerce.number().default(30),
+		MAX_BUILD_SIZE_MB: z.coerce.number().default(500),
+		MAX_BUILDS_PER_USER: z.coerce.number().default(50),
+		ENABLE_BUILD_SHARING: z.coerce.boolean().default(true),
 	},
 
 	/**
@@ -29,6 +41,18 @@ export const env = createEnv({
 	runtimeEnv: {
 		DATABASE_URL: process.env.DATABASE_URL,
 		NODE_ENV: process.env.NODE_ENV,
+		ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+		// Cloudflare R2 Configuration
+		R2_ENDPOINT: process.env.R2_ENDPOINT,
+		R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+		R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+		R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
+		R2_PUBLIC_URL: process.env.R2_PUBLIC_URL,
+		// Build Storage Settings
+		BUILD_RETENTION_DAYS: process.env.BUILD_RETENTION_DAYS,
+		MAX_BUILD_SIZE_MB: process.env.MAX_BUILD_SIZE_MB,
+		MAX_BUILDS_PER_USER: process.env.MAX_BUILDS_PER_USER,
+		ENABLE_BUILD_SHARING: process.env.ENABLE_BUILD_SHARING,
 		// NEXT_PUBLIC_CLIENTVAR: process.env.NEXT_PUBLIC_CLIENTVAR,
 	},
 	/**
