@@ -46,12 +46,18 @@ export interface DownloadResult {
  * Handles file upload, download, and management
  */
 export class ObjectStorageService {
-  private client: S3Client;
+  private client: S3Client | null = null;
   private bucketName: string;
 
   constructor() {
-    this.client = getS3Client();
     this.bucketName = env.R2_BUCKET_NAME || "promptfuel-builds";
+  }
+
+  private getClient(): S3Client {
+    if (!this.client) {
+      this.client = getS3Client();
+    }
+    return this.client;
   }
 
   /**
@@ -78,7 +84,7 @@ export class ObjectStorageService {
       });
 
       console.log(`[ObjectStorage] Uploading ${filePath} for session ${sessionId}`);
-      const result = await this.client.send(command);
+      const result = await this.getClient().send(command);
 
       const url = this.getPublicUrl(key);
       const size = Buffer.isBuffer(body) ? body.length : 
@@ -130,7 +136,7 @@ export class ObjectStorageService {
       });
 
       console.log(`[ObjectStorage] Uploading stream ${fileName} for session ${sessionId}`);
-      const result = await this.client.send(command);
+      const result = await this.getClient().send(command);
 
       const url = this.getPublicUrl(key);
 
@@ -157,7 +163,7 @@ export class ObjectStorageService {
       });
 
       console.log(`[ObjectStorage] Downloading ${key}`);
-      const result = await this.client.send(command);
+      const result = await this.getClient().send(command);
 
       if (!result.Body) {
         throw new Error("No file body returned");
@@ -204,7 +210,7 @@ export class ObjectStorageService {
       });
 
       console.log(`[ObjectStorage] Deleting ${key}`);
-      await this.client.send(command);
+      await this.getClient().send(command);
     } catch (error) {
       console.error(`[ObjectStorage] Delete failed for ${key}:`, error);
       throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : String(error)}`);
@@ -221,7 +227,7 @@ export class ObjectStorageService {
         Key: key,
       });
 
-      const result = await this.client.send(command);
+      const result = await this.getClient().send(command);
       
       return {
         exists: true,
@@ -248,7 +254,7 @@ export class ObjectStorageService {
         Key: key,
       });
 
-      return await getSignedUrl(this.client, command, { expiresIn });
+      return await getSignedUrl(this.getClient(), command, { expiresIn });
     } catch (error) {
       console.error(`[ObjectStorage] Signed URL generation failed for ${key}:`, error);
       throw new Error(`Failed to generate signed URL: ${error instanceof Error ? error.message : String(error)}`);

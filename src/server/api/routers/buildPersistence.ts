@@ -426,7 +426,7 @@ export const buildPersistenceRouter = createTRPCRouter({
         // Check if build has expired
         if (buildSession.expiresAt && buildSession.expiresAt < new Date()) {
           throw new TRPCError({
-            code: "GONE",
+            code: "NOT_FOUND",
             message: `Build has expired: ${sessionId}`,
           });
         }
